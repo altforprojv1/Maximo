@@ -1,9 +1,11 @@
 /**
  * @file MathRenderer.js
  * @description WebView-based rich math content renderer using KaTeX for LaTeX
- * notation. Used exclusively for rendering AI-generated solutions from the
- * Scanner and Solver (AI mode) screens, where the response may contain
- * inline/display LaTeX, step-by-step formatting, and markdown-style markup.
+ * notation. Used for:
+ *  - AI-generated solutions (Scanner and Solver screens): full markdown pipeline,
+ *    PROBLEM/Step/ANSWER boxes, multi-line LaTeX
+ *  - Educational content (TopicScreen theory and examples)
+ *  - Quiz questions, options, and explanations (QuizScreen)
  *
  * The component generates a self-contained HTML document that:
  * 1. Converts markdown-style formatting (headers, bold, bullet lists)
@@ -12,9 +14,9 @@
  * 4. Measures its own scroll height and reports it to React Native so the
  *    parent View can size the WebView exactly (avoids scroll-in-scroll issues)
  *
- * Note: This is intentionally NOT used for simple inline math display
- * (see MathDisplay.js for that). WebView instances are heavyweight on mobile,
- * so we limit their use to complex AI output where KaTeX is truly needed.
+ * The `transparent` prop is used for quiz option cells: the WebView background
+ * is set to transparent so the parent TouchableOpacity's correct/incorrect
+ * highlight colour shows through without reloading the WebView HTML.
  *
  * @requires react-native-webview
  * @requires KaTeX 0.16.9 (loaded from CDN)
@@ -25,6 +27,8 @@
  * - Added PROBLEM box styling (blue left border)
  * - Added two-pass height measurement (600ms + 1500ms) to handle late KaTeX load
  * - Added bullet list wrapping (<li> → <ul>)
+ * - Added `transparent` prop for quiz option cells (background shows through)
+ * - Compact mode now starts at 60px initial height (was 400) to reduce layout pop
  */
 
 import React from 'react';
@@ -35,15 +39,29 @@ import { WebView } from 'react-native-webview';
  * Renders AI-generated math solution content with full KaTeX LaTeX support.
  * Automatically sizes itself to fit the rendered content height.
  *
- * @param {Object} props
- * @param {string} props.content - Raw AI response text (may contain markdown,
+ * @param {Object}  props
+ * @param {string}  props.content - Raw AI response text (may contain markdown,
  *   LaTeX delimiters, PROBLEM/Step/ANSWER markers).
+ * @param {boolean} [props.compact=false] - When true, reduces body padding,
+ *   line-height, and display-math margins so the component fits inside a small
+ *   inline preview box without excess whitespace. The default (false) is suited
+ *   for full-width result panels where vertical breathing room helps readability.
+ * @param {boolean} [props.transparent=false] - When true, the WebView body
+ *   background is set to transparent and the React Native WebView layer is also
+ *   transparent, so the parent View's background colour shows through. Used for
+ *   quiz option cells where the background changes to green/red on selection.
+ *   Requires androidLayerType="software" on Android (applied automatically).
  * @returns {React.ReactElement}
  */
-export default function MathRenderer({ content }) {
+export default function MathRenderer({ content, compact = false, transparent = false }) {
   const { width } = useWindowDimensions();
 
-  // Self-contained HTML document with KaTeX CSS/JS from CDN
+  /*
+   * The entire HTML page is generated as a template string so it can be passed
+   * directly to WebView's `source.html` prop — no server or file URI required.
+   * KaTeX CSS/JS are loaded from CDN; the component therefore needs network
+   * access to render LaTeX (gracefully degrades to plain text if offline).
+   */
   const html = `<!DOCTYPE html>
 <html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -53,16 +71,19 @@ export default function MathRenderer({ content }) {
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body {
-    background: #16213e;
+    background: ${transparent ? 'transparent' : '#16213e'};
     color: #ddd;
     font-family: -apple-system, system-ui, sans-serif;
-    font-size: 15px;
-    line-height: 1.7;
-    padding: 16px;
+    /* compact mode tightens these three values for use as an inline preview */
+    font-size: ${compact ? '16px' : '15px'};
+    line-height: ${compact ? '1.3' : '1.7'};
+    padding: ${compact ? '8px 12px' : '16px'};
     word-wrap: break-word;
   }
-  .katex { font-size: 1.1em; }
-  .katex-display { margin: 12px 0; overflow-x: auto; padding: 4px 0; }
+  .katex { font-size: ${compact ? '1.2em' : '1.1em'}; }
+  /* compact mode collapses the generous vertical space KaTeX adds around
+     display-mode equations — important so the preview box stays short */
+  .katex-display { margin: ${compact ? '2px 0' : '12px 0'}; overflow-x: auto; padding: 2px 0; }
   .katex-display > .katex { text-align: left; }
   h1, h2, h3 { color: #e94560; margin: 16px 0 8px 0; font-family: -apple-system, system-ui, sans-serif; }
   h1 { font-size: 20px; border-bottom: 1px solid #0f3460; padding-bottom: 4px; }
@@ -102,7 +123,8 @@ export default function MathRenderer({ content }) {
 <script>
 const raw = ${JSON.stringify(content || '')};
 
-// Convert markdown-style formatting to HTML
+// Convert markdown-style formatting to HTML before KaTeX runs, so that
+// structural markers (##, **, Step N:) don't interfere with math parsing
 let html = raw
   .replace(/^### (.+)$/gm, '<h3>$1</h3>')
   .replace(/^## (.+)$/gm, '<h2>$1</h2>')
@@ -114,14 +136,18 @@ let html = raw
   .replace(/^[•\\-] (.+)$/gm, '<li>$1</li>')
   .replace(/\\n/g, '<br>');
 
-// Wrap consecutive <li> elements in <ul>
+// Wrap consecutive <li> elements in a <ul> container.
+// The regex matches runs of <li>...<br>? so that the <br> newline separators
+// inserted above don't break up what should be a single list block.
 html = html.replace(/(<li>.*?<\\/li>(<br>)?)+/g, (match) => {
   return '<ul>' + match.replace(/<br>/g, '') + '</ul>';
 });
 
 document.getElementById('content').innerHTML = html;
 
-// Run KaTeX auto-render on the content
+// Run KaTeX auto-render on the content after the HTML is in the DOM.
+// Multiple delimiter styles are supported so AI responses don't need to use
+// a single consistent notation.
 renderMathInElement(document.getElementById('content'), {
   delimiters: [
     {left: '$$', right: '$$', display: true},
@@ -129,10 +155,17 @@ renderMathInElement(document.getElementById('content'), {
     {left: '\\\\(', right: '\\\\)', display: false},
     {left: '\\\\[', right: '\\\\]', display: true},
   ],
-  throwOnError: false
+  throwOnError: false // render what we can; don't crash on malformed LaTeX
 });
 
-// Report content height to React Native (two passes for late-loading KaTeX)
+/*
+ * Two-pass height reporting: KaTeX fonts load asynchronously from the CDN,
+ * so document.body.scrollHeight is too small immediately after render.
+ * The 600 ms pass captures most cases; the 1500 ms pass catches slow connections
+ * where KaTeX hasn't finished by the first measurement. React Native resizes
+ * the containing View on each message, so the second pass simply overwrites
+ * the first if the height changed.
+ */
 setTimeout(() => {
   window.ReactNativeWebView.postMessage(JSON.stringify({height: document.body.scrollHeight}));
 }, 600);
@@ -142,19 +175,34 @@ setTimeout(() => {
 </script>
 </body></html>`;
 
-  const [webViewHeight, setWebViewHeight] = React.useState(400);
+  /*
+   * Initial height: compact mode uses 60px (one line of inline math ≈ 36–44px)
+   * so the layout pop is minimal. Non-compact uses 400px as a generous default
+   * for multi-paragraph theory/solution content.
+   */
+  const [webViewHeight, setWebViewHeight] = React.useState(compact ? 60 : 400);
 
   return (
-    <View style={{ height: webViewHeight, borderRadius: 12, overflow: 'hidden' }}>
+    // overflow:hidden clips rounded corners — WebView ignores borderRadius on its own.
+    // transparent mode has no rounding (parent card provides the border radius).
+    <View style={{ height: webViewHeight, borderRadius: transparent ? 0 : 12, overflow: 'hidden' }}>
       <WebView
         source={{ html }}
-        style={{ backgroundColor: '#16213e' }}
+        style={{ backgroundColor: transparent ? 'transparent' : '#16213e' }}
+        // Disable WebView's own scroll; the parent ScrollView handles scrolling.
+        // This prevents conflicting scroll gestures (scroll-in-scroll jank).
         scrollEnabled={false}
+        // Software rendering is required on Android for transparent backgrounds;
+        // hardware-accelerated layers don't support WebView transparency.
+        androidLayerType={transparent ? 'software' : undefined}
         onMessage={(event) => {
           try {
             const data = JSON.parse(event.nativeEvent.data);
-            if (data.height) setWebViewHeight(Math.max(data.height + 20, 100));
-          } catch (e) { /* ignore parse errors */ }
+            // +20px ensures the last line isn't clipped by the View boundary.
+            // compact mode uses a 40px floor (single-line math ≈ 36–44px total)
+            // so the card doesn't balloon to the non-compact 100px minimum.
+            if (data.height) setWebViewHeight(Math.max(data.height + 20, compact ? 40 : 100));
+          } catch (e) { /* ignore parse errors from non-height messages */ }
         }}
       />
     </View>

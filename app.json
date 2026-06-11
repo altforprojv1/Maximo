@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "CalcOptimizer",
+    "name": "Maximo",
     "slug": "calc-optimizer",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -12,21 +12,37 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#1a1a2e"
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#faf6f0"
       },
       "package": "com.calcoptimizer.app",
       "permissions": [
-        "CAMERA"
-      ]
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "softwareKeyboardLayoutMode": "pan"
     },
     "plugins": [
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow CalcOptimizer to access your camera to scan math problems."
+          "cameraPermission": "Allow Maximo to access your camera to scan math problems."
         }
       ],
-      "expo-asset"
-    ]
+      "expo-asset",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Maximo to save captured photos to your gallery.",
+          "savePhotosPermission": "Allow Maximo to save captured photos to your gallery."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "63640b8c-6b5e-41b5-b88a-5df1911b5f34"
+      }
+    }
   }
 }

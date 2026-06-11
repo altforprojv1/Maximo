@@ -23,11 +23,15 @@
 
 import React, { useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, Keyboard,
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, Keyboard, useWindowDimensions,
 } from 'react-native';
+// useSafeAreaInsets provides the bottom inset to clear the gesture navigation bar
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
-import { generatePlotData, findCriticalPoints, classifyCriticalPoints, findInflectionPoints, tangentLineAt, computeDerivative, computeSecondDerivative } from '../services/mathSolver';
+import { generatePlotData, findCriticalPoints, classifyCriticalPoints, findInflectionPoints, tangentLineAt, computeDerivative, computeSecondDerivative, toLatex } from '../services/mathSolver';
 import MathDisplay, { exprToLatex, MathInfoBlock } from '../components/MathDisplay';
+// MathRenderer renders the live KaTeX preview (same as SolverScreen)
+import MathRenderer from '../components/MathRenderer';
 import MathKeyboard from '../components/MathKeyboard';
 
 /**
@@ -98,21 +102,30 @@ ctx.fillText('f(x) = ${expr.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}',PAD.l+
 </script></body></html>`;
 }
 
+/*
+ * Each example pre-fills ALL four input fields so clicking one gives an
+ * immediately plottable state. tangentX '' means no tangent line.
+ * Values are chosen to show each function's most interesting features.
+ */
 const EXAMPLES = [
-  { label: 'x³−3x+2', expr: 'x^3 - 3*x + 2' },
-  { label: 'sin x', expr: 'sin(x)' },
-  { label: 'x⁴−2x²', expr: 'x^4 - 2*x^2' },
-  { label: 'e^{-x²}', expr: 'e^(-x^2)' },
-  { label: '1/(1+x²)', expr: '1/(1+x^2)' },
-  { label: 'ln x', expr: 'log(x)', xMin: '0.1', xMax: '10' },
+  { label: 'x³−3x+2',   expr: 'x^3 - 3*x + 2',   xMin: '-3',    xMax: '3',    tangentX: '0'  },
+  { label: 'sin(x)',     expr: 'sin(x)',             xMin: '-6.28', xMax: '6.28', tangentX: '0'  },
+  { label: 'e^{-x²}',   expr: 'e^(-x^2)',           xMin: '-3',    xMax: '3',    tangentX: '1'  },
+  { label: '1/(1+x²)',  expr: '1/(1+x^2)',           xMin: '-5',    xMax: '5',    tangentX: '1'  },
+  { label: 'ln(x)',      expr: 'log(x)',              xMin: '0.1',   xMax: '10',   tangentX: '1'  },
+  { label: 'x⁴−8x²+3', expr: 'x^4 - 8*x^2 + 3',   xMin: '-3',    xMax: '3',    tangentX: '2'  },
 ];
 
 /** @returns {React.ReactElement} Visualizer screen with plot, controls, info panel. */
 export default function VisualizerScreen() {
+  // Bottom inset ensures the info panel and keyboard don't overlap the gesture nav bar
+  const insets = useSafeAreaInsets();
+  // width drives the graph height so it stays square and never gets squished
+  const { width } = useWindowDimensions();
   const [expr, setExpr] = useState('x^3 - 3*x + 2');
-  const [xMin, setXMin] = useState('-5');
-  const [xMax, setXMax] = useState('5');
-  const [tangentX, setTangentX] = useState('');
+  const [xMin, setXMin] = useState('-3');
+  const [xMax, setXMax] = useState('3');
+  const [tangentX, setTangentX] = useState('0');
   const [plotHtml, setPlotHtml] = useState(null);
   const [info, setInfo] = useState(null);
   const [showKeyboard, setShowKeyboard] = useState(false);
@@ -150,52 +163,101 @@ export default function VisualizerScreen() {
     } catch (e) { Alert.alert('Error', e.message); }
   };
 
-  const reset = () => { setExpr('x^3 - 3*x + 2'); setXMin('-5'); setXMax('5'); setTangentX(''); setPlotHtml(null); setInfo(null); };
+  const reset = () => { setExpr('x^3 - 3*x + 2'); setXMin('-3'); setXMax('3'); setTangentX('0'); setPlotHtml(null); setInfo(null); };
+
+  // Graph height: square based on screen width minus horizontal margins.
+  // Capped at 400 so tablets don't get an oversized plot.
+  const plotHeight = Math.min(Math.round(width - 12), 400);
 
   return (
+    // Outer View holds the scrollable area + keyboard so the keyboard stays pinned
     <View style={s.container}>
-      <View style={s.controls}>
-        {expr.length > 0 && (
-          <View style={s.previewBox}>
-            <Text style={s.previewLabel}>f(x) = </Text>
-            <MathDisplay latex={exprToLatex(expr)} style={{ flex: 1, height: 32 }} />
+      {/*
+        Everything above the keyboard (controls, graph, info panel) lives in a
+        single ScrollView so no content is ever clipped or squished.
+      */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: showKeyboard ? 8 : insets.bottom + 16 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={s.controls}>
+          {/* Expression input + KaTeX preview — matches SolverScreen layout */}
+          <Text style={s.label}>f(x) =</Text>
+          <TouchableOpacity style={s.inputBtn} onPress={() => { setShowKeyboard(true); Keyboard.dismiss(); }}>
+            <Text style={[s.inputText, !expr && { color: '#555' }]}>{expr || 'Tap to enter f(x)...'}</Text>
+          </TouchableOpacity>
+          {/* Live KaTeX preview — falls back to MathDisplay while mid-edit */}
+          {expr.length > 0 && (() => {
+            const latex = toLatex(expr);
+            return (
+              <>
+                <Text style={s.label}>Preview:</Text>
+                <View style={s.previewBox}>
+                  {latex
+                    ? <MathRenderer content={`$${latex}$`} compact />
+                    : <MathDisplay latex={exprToLatex(expr)} style={{ height: 44 }} />
+                  }
+                </View>
+              </>
+            );
+          })()}
+          <View style={s.row}>
+            <View style={{ flex: 1 }}><Text style={s.label}>x min</Text><TextInput style={s.inputBtnSm} value={xMin} onChangeText={setXMin} keyboardType="numeric" placeholderTextColor="#555" /></View>
+            <View style={{ flex: 1, marginLeft: 6 }}><Text style={s.label}>x max</Text><TextInput style={s.inputBtnSm} value={xMax} onChangeText={setXMax} keyboardType="numeric" placeholderTextColor="#555" /></View>
+            <View style={{ flex: 1, marginLeft: 6 }}><Text style={s.label}>Tangent x=</Text><TextInput style={s.inputBtnSm} value={tangentX} onChangeText={setTangentX} keyboardType="numeric" placeholder="—" placeholderTextColor="#555" /></View>
           </View>
-        )}
-        <TouchableOpacity style={s.inputBtn} onPress={() => { setShowKeyboard(true); Keyboard.dismiss(); }}>
-          <Text style={[s.inputText, !expr && { color: '#555' }]}>{expr || 'Tap to enter f(x)...'}</Text>
-        </TouchableOpacity>
-        <View style={s.row}>
-          <View style={{ flex: 1 }}><Text style={s.label}>x min</Text><TextInput style={s.inputBtnSm} value={xMin} onChangeText={setXMin} keyboardType="numeric" placeholderTextColor="#555" /></View>
-          <View style={{ flex: 1, marginLeft: 6 }}><Text style={s.label}>x max</Text><TextInput style={s.inputBtnSm} value={xMax} onChangeText={setXMax} keyboardType="numeric" placeholderTextColor="#555" /></View>
-          <View style={{ flex: 1, marginLeft: 6 }}><Text style={s.label}>Tangent x=</Text><TextInput style={s.inputBtnSm} value={tangentX} onChangeText={setTangentX} keyboardType="numeric" placeholder="—" placeholderTextColor="#555" /></View>
+          <View style={s.btnRow}>
+            <TouchableOpacity style={s.plotBtn} onPress={plot}><Text style={s.plotBtnText}>Plot & Analyze</Text></TouchableOpacity>
+            <TouchableOpacity style={s.resetBtn} onPress={reset}><Text style={s.resetBtnText}>↺</Text></TouchableOpacity>
+          </View>
+          {/* Quick examples: all fields pre-filled so a single tap is plot-ready */}
+          <Text style={s.exLabel}>Quick examples:</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
+            {EXAMPLES.map(ex => (
+              <TouchableOpacity
+                key={ex.expr}
+                style={s.exBtn}
+                onPress={() => {
+                  setExpr(ex.expr);
+                  setXMin(ex.xMin);
+                  setXMax(ex.xMax);
+                  // Always update tangentX so stale values from a previous example
+                  // don't carry over — '' means no tangent line
+                  setTangentX(ex.tangentX);
+                }}
+              >
+                <Text style={s.exBtnText}>{ex.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
-        <View style={s.btnRow}>
-          <TouchableOpacity style={s.plotBtn} onPress={plot}><Text style={s.plotBtnText}>Plot & Analyze</Text></TouchableOpacity>
-          <TouchableOpacity style={s.resetBtn} onPress={reset}><Text style={s.resetBtnText}>↺</Text></TouchableOpacity>
+
+        {/* Graph box: fixed height derived from screen width so it never squishes.
+            The WebView fills the height completely; overflow:hidden clips the corners. */}
+        <View style={[s.plotBox, { height: plotHeight }]}>
+          {plotHtml ? (
+            <WebView source={{ html: plotHtml }} style={{ flex: 1, backgroundColor: '#0d1b2a' }} scrollEnabled={false} />
+          ) : (
+            <View style={s.ph}>
+              <Text style={{ fontSize: 40 }}>📈</Text>
+              <Text style={s.phText}>Enter a function and tap Plot & Analyze</Text>
+            </View>
+          )}
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {EXAMPLES.map(ex => (
-            <TouchableOpacity key={ex.expr} style={s.exBtn} onPress={() => { setExpr(ex.expr); if (ex.xMin) setXMin(ex.xMin); if (ex.xMax) setXMax(ex.xMax); }}>
-              <Text style={s.exBtnText}>{ex.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-      <View style={s.plotBox}>
-        {plotHtml ? (
-          <WebView source={{ html: plotHtml }} style={{ flex: 1, backgroundColor: '#0d1b2a' }} scrollEnabled={false} />
-        ) : (
-          <View style={s.ph}><Text style={{ fontSize: 40 }}>📈</Text><Text style={s.phText}>Enter a function and tap Plot & Analyze</Text></View>
-        )}
-      </View>
-      {info && <MathInfoBlock lines={info} style={s.infoPanel} />}
+
+        {/* Analysis panel scrolls below the graph — paddingBottom clears nav bar */}
+        {info && <MathInfoBlock lines={info} style={[s.infoPanel, { paddingBottom: insets.bottom + 8 }]} />}
+      </ScrollView>
+
+      {/* Scientific keyboard pinned outside the ScrollView */}
       {showKeyboard && (
         <View>
           <View style={s.kbHeader}>
             <Text style={s.kbLabel}>f(x) =</Text>
             <TouchableOpacity onPress={() => setShowKeyboard(false)}><Text style={s.kbDone}>Done</Text></TouchableOpacity>
           </View>
-          <MathKeyboard value={expr} onChangeText={setExpr} onHint={(msg) => Alert.alert('Tip', msg)} />
+          <MathKeyboard value={expr} onChangeText={setExpr} onHint={(msg) => Alert.alert('Tip', msg)} layout="visualizer" />
         </View>
       )}
     </View>
@@ -205,9 +267,9 @@ export default function VisualizerScreen() {
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#1a1a2e' },
   controls: { padding: 10, paddingBottom: 4 },
-  previewBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0d1b2a', borderRadius: 8, paddingLeft: 10, marginBottom: 4, borderWidth: 1, borderColor: '#0f3460' },
-  previewLabel: { color: '#888', fontSize: 13, fontStyle: 'italic' },
-  label: { color: '#888', fontSize: 11, marginBottom: 2 },
+  // previewBox no longer needs row layout — MathRenderer fills it vertically like SolverScreen
+  previewBox: { backgroundColor: '#0d1b2a', borderRadius: 10, marginBottom: 4, borderWidth: 1, borderColor: '#0f3460' },
+  label: { color: '#888', fontSize: 13, marginBottom: 4, fontWeight: '600' },
   inputBtn: { backgroundColor: '#16213e', borderRadius: 8, padding: 10, marginBottom: 4, borderWidth: 1, borderColor: '#0f3460' },
   inputBtnSm: { color: '#fff', backgroundColor: '#16213e', borderRadius: 8, padding: 8, borderWidth: 1, borderColor: '#0f3460' },
   inputText: { color: '#fff', fontSize: 14 },
@@ -217,9 +279,11 @@ const s = StyleSheet.create({
   plotBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
   resetBtn: { backgroundColor: '#0f3460', borderRadius: 8, padding: 11, paddingHorizontal: 16 },
   resetBtnText: { color: '#888', fontSize: 18 },
-  exBtn: { backgroundColor: '#0f3460', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, marginRight: 6 },
+  exLabel: { color: '#555', fontSize: 11, marginBottom: 6 },
+  exBtn: { backgroundColor: '#0f3460', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 6 },
   exBtnText: { color: '#aaa', fontSize: 12 },
-  plotBox: { flex: 1, marginHorizontal: 6, marginBottom: 4, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0d1b2a', borderWidth: 1, borderColor: '#0f3460' },
+  // height is applied dynamically via plotHeight so flex:1 is not needed here
+  plotBox: { marginHorizontal: 6, marginBottom: 4, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0d1b2a', borderWidth: 1, borderColor: '#0f3460' },
   ph: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   phText: { color: '#444', fontSize: 14, marginTop: 8 },
   infoPanel: { borderTopWidth: 1, borderTopColor: '#0f3460' },

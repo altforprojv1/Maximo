@@ -52,12 +52,12 @@ const PROVIDERS = {
     signupUrl: 'https://platform.openai.com/api-keys',
     pricing: '~$0.002/scan (4o-mini), ~$0.01/scan (4o)',
   },
-  gemini: {
+gemini: {
     name: 'Google Gemini',
     url: 'https://generativelanguage.googleapis.com/v1beta/models',
     placeholder: 'AIzaSy...',
-    models: ['gemini-2.0-flash', 'gemini-2.0-pro'],
-    defaultModel: 'gemini-2.0-flash',
+    models: ['gemini-3.5-flash', 'gemini-2.5-flash'], // Updated models
+    defaultModel: 'gemini-3.5-flash',                 // Updated default
     signupUrl: 'https://aistudio.google.com/apikey',
     pricing: 'Free tier available, then ~$0.001/scan (Flash)',
   },

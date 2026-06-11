@@ -1,4 +1,4 @@
-# CalcOptimizer
+# Maximo
 
 **SENG390 Senior Project I  |  Group 12 ROOK**
 
@@ -159,7 +159,7 @@ developer fee. We did not pay this since the APK is distributed directly.
 ## Project Structure
 
 ```
-CalcOptimizer/
+Maximo/
   App.js                          Tab navigator setup, dark theme
   app.json                        Expo config and Android permissions
   package.json                    Dependency list

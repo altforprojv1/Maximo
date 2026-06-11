@@ -27,48 +27,96 @@
 import React, { useState } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator, Keyboard,
-  TextInput,
 } from 'react-native';
-import { analyzeFunction, computeDerivative, computeSecondDerivative, solveCalculusProblem } from '../services/mathSolver';
-import { solveFromText, isApiKeySet } from '../services/aiService';
+// useSafeAreaInsets provides the bottom inset to clear the gesture navigation bar
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// toLatex is used for the live KaTeX preview box; the others drive computation
+import { analyzeFunction, computeDerivative, computeSecondDerivative, solveCalculusProblem, toLatex } from '../services/mathSolver';
+// MathRenderer renders full KaTeX output (derivative / integrate results)
 import MathRenderer from '../components/MathRenderer';
-import MathDisplay, { exprToLatex } from '../components/MathDisplay';
+// exprToDisplay is imported so examples can stay as raw strings while still
+// rendering in a human-readable form inside the preview box fallback
+import MathDisplay, { exprToLatex, exprToDisplay } from '../components/MathDisplay';
 import MathKeyboard from '../components/MathKeyboard';
 
 /** @constant {Array<{key: string, label: string}>} Available computation modes. */
 const MODES = [
   { key: 'derivative', label: '∂ Derivative' },
-  { key: 'optimize', label: '📊 Optimize' },
-  { key: 'limit', label: '→ Limit' },
-  { key: 'ai', label: '🤖 AI Solve' },
+  { key: 'integrate', label: '∫ Integrate' },
+  { key: 'optimize',  label: 'Optimize'    },
+  { key: 'limit',     label: '→ Limit'     },
 ];
+
+/*
+ * Per-mode example sets. Each mode has its own array so the quick-example bar
+ * only shows relevant expressions. Integrate examples include pre-filled bounds
+ * so tapping an example immediately populates all required fields.
+ */
+const EXAMPLES = {
+  derivative: [
+    { raw: 'x^3 - 3*x + 2',       label: 'x³−3x+2'    },
+    { raw: 'sin(x) * cos(x)',      label: 'sin·cos'     },
+    { raw: 'e^x * x^2',            label: 'eˣ·x²'      },
+    { raw: 'log(x) / x',           label: 'ln(x)/x'    },
+    { raw: 'sqrt(x) * (x + 1)',    label: '√x·(x+1)'   },
+    { raw: 'tan(x)^2',             label: 'tan²(x)'    },
+  ],
+  integrate: [
+    { raw: 'x^2',         label: 'x²',          lower: '0',  upper: '3'  },
+    { raw: 'sin(x)',      label: 'sin(x)',       lower: '0',  upper: '3.14159' },
+    { raw: 'e^x',         label: 'eˣ',           lower: '0',  upper: '1'  },
+    { raw: '1 / x',       label: '1/x',         lower: '1',  upper: '2.71828' },
+    { raw: 'x^3 - 3*x',  label: 'x³−3x',       lower: '-1', upper: '2'  },
+    { raw: 'cos(x)^2',   label: 'cos²(x)',      lower: '0',  upper: '3.14159' },
+  ],
+  optimize: [
+    { raw: 'x^3 - 3*x + 2',        label: 'x³−3x+2'    },
+    { raw: 'x^4 - 8*x^2 + 3',      label: 'x⁴−8x²+3'  },
+    { raw: '-x^2 + 4*x - 1',       label: '−x²+4x−1'  },
+    { raw: 'x^3 - 6*x^2 + 9*x',   label: 'x³−6x²+9x' },
+    { raw: 'x^5 - 5*x^3',          label: 'x⁵−5x³'    },
+    { raw: 'sin(x) + x / 2',       label: 'sin+x/2'    },
+  ],
+  limit: [
+    { raw: 'sin(x) / x',             label: 'sin(x)/x', limitVal: '0'  },
+    { raw: '(x^2 - 1) / (x - 1)',   label: '(x²−1)/(x−1)', limitVal: '1' },
+    { raw: '(e^x - 1) / x',         label: '(eˣ−1)/x', limitVal: '0'  },
+    { raw: 'x * sin(1 / x)',         label: 'x·sin(1/x)', limitVal: '0' },
+    { raw: '(1 - cos(x)) / x^2',    label: '(1−cos)/x²', limitVal: '0' },
+    { raw: 'log(x) / (x - 1)',      label: 'ln(x)/(x−1)', limitVal: '1' },
+  ],
+};
 
 /**
  * Problem Solver screen component.
  * @returns {React.ReactElement}
  */
 export default function SolverScreen() {
+  // Bottom inset ensures scroll content never hides behind the gesture nav bar
+  const insets = useSafeAreaInsets();
   const [mode, setMode] = useState('derivative');
   const [expression, setExpression] = useState('');
   const [variable, setVariable] = useState('x');
   const [limitValue, setLimitValue] = useState('0');
+  // Bounds are only used in integrate + definite mode
+  const [lowerBound, setLowerBound] = useState('0');
+  const [upperBound, setUpperBound] = useState('1');
+  // isDefinite toggles between definite (numerical, requires bounds) and
+  // indefinite (symbolic antiderivative, no bounds needed)
+  const [isDefinite, setIsDefinite] = useState(true);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showKeyboard, setShowKeyboard] = useState(false);
-  const [activeField, setActiveField] = useState('expr'); // 'expr', 'var', 'limit'
-
-  /**
-   * AI prompt: tells the AI what to do with the expression.
-   * Only visible and used in AI Solve mode.
-   * @type {[string, function]}
-   */
-  const [aiPrompt, setAiPrompt] = useState('');
+  // activeField tells the shared MathKeyboard which state variable to update
+  const [activeField, setActiveField] = useState('expr'); // 'expr', 'var', 'limit', 'lower', 'upper'
 
   /** Routes keyboard input to the currently active field. */
   const handleKeyboardInput = (val) => {
     if (activeField === 'expr') setExpression(val);
     else if (activeField === 'var') setVariable(val);
     else if (activeField === 'limit') setLimitValue(val);
+    else if (activeField === 'lower') setLowerBound(val);
+    else if (activeField === 'upper') setUpperBound(val);
   };
 
   /** Returns the current value of the active input field. */
@@ -76,7 +124,23 @@ export default function SolverScreen() {
     if (activeField === 'expr') return expression;
     if (activeField === 'var') return variable;
     if (activeField === 'limit') return limitValue;
+    if (activeField === 'lower') return lowerBound;
+    if (activeField === 'upper') return upperBound;
     return '';
+  };
+
+  /**
+   * Returns the MathKeyboard layout appropriate for the active field.
+   * - 'variable' : var field — only letter keys, no digits or operators
+   * - 'numeric'  : limit value and integration bounds — number pad + constants
+   * - 'expression': expression fields — full scientific keyboard
+   */
+  const getKeyboardLayout = () => {
+    if (activeField === 'var') return 'variable';
+    if (activeField === 'limit' || activeField === 'lower' || activeField === 'upper') return 'numeric';
+    // Return the solver mode name directly — each mode has its own expression
+    // layout in MathKeyboard (derivative, integrate, optimize, limit)
+    return mode;
   };
 
   /**
@@ -95,32 +159,22 @@ export default function SolverScreen() {
     Keyboard.dismiss();
 
     try {
-      if (mode === 'ai') {
-        if (!(await isApiKeySet())) {
-          Alert.alert('API Key Required', 'Go to Settings to configure your AI provider.');
-          setLoading(false);
-          return;
-        }
-
-        // Build the message: combine expression + user's instruction prompt
-        let message = '';
-        if (aiPrompt.trim()) {
-          // User gave a specific instruction — send expression + instruction
-          message = `Expression: ${expression}\n\nInstruction: ${aiPrompt.trim()}`;
-        } else {
-          // No instruction — just send expression (backwards-compatible)
-          message = expression;
-        }
-
-        const res = await solveFromText(message);
-        if (res.success) {
-          setResult({ type: 'ai', text: res.solution });
-        } else {
-          Alert.alert('Error', res.error);
-        }
-      } else if (mode === 'derivative') {
+      if (mode === 'derivative') {
         const res = solveCalculusProblem('derivative', { expr: expression, variable: variable || 'x' });
         setResult({ type: 'derivative', data: res });
+      } else if (mode === 'integrate') {
+        if (isDefinite) {
+          // Validate bounds before passing to the numerical integrator
+          const a = parseFloat(lowerBound);
+          const b = parseFloat(upperBound);
+          if (isNaN(a) || isNaN(b)) throw new Error('Bounds must be valid numbers.');
+          const res = solveCalculusProblem('integrate', { expr: expression, variable: variable || 'x', lower: a, upper: b, indefinite: false });
+          setResult({ type: 'integrate', data: res });
+        } else {
+          // Indefinite mode: symbolic antiderivative, no bounds required
+          const res = solveCalculusProblem('integrate', { expr: expression, variable: variable || 'x', indefinite: true });
+          setResult({ type: 'integrate', data: res });
+        }
       } else if (mode === 'optimize') {
         const res = analyzeFunction(expression, variable || 'x');
         setResult({ type: 'optimize', data: res });
@@ -152,14 +206,23 @@ export default function SolverScreen() {
       return (
         <View style={s.resultBox}>
           <Text style={s.resultTitle}>Derivative</Text>
-          <View style={s.stepBox}>
-            <Text style={s.stepLabel}>Given:</Text>
-            <MathDisplay latex={`f(${variable || 'x'}) = ${exprToLatex(d.input)}`} style={s.mathLine} />
-          </View>
-          <View style={s.stepBox}>
-            <Text style={s.stepLabel}>Result:</Text>
-            <MathDisplay latex={`f'(${variable || 'x'}) = ${exprToLatex(d.derivative)}`} style={s.mathLine} />
-          </View>
+          {/* d.latex contains both f(x) and f'(x) as a KaTeX markdown block */}
+          <MathRenderer content={d.latex} />
+        </View>
+      );
+    }
+
+    if (result.type === 'integrate') {
+      const d = result.data;
+      return (
+        <View style={s.resultBox}>
+          <Text style={s.resultTitle}>{d.indefinite ? 'Indefinite Integral' : 'Definite Integral'}</Text>
+          {/* Wrap in $$ so MathRenderer treats the whole string as display math */}
+          <MathRenderer content={`$$${d.latex}$$`} />
+          {/* Remind the user that definite results are numerical approximations */}
+          {!d.indefinite && (
+            <Text style={[s.dimText, { marginTop: 4 }]}>Numerical (Simpson's rule, n = 1000)</Text>
+          )}
         </View>
       );
     }
@@ -222,7 +285,8 @@ export default function SolverScreen() {
 
   return (
     <View style={s.container}>
-      <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: showKeyboard ? 20 : 40 }}
+      {/* paddingBottom: insets.bottom ensures the last result doesn't sit behind the gesture nav bar */}
+      <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: showKeyboard ? 20 : 40 + insets.bottom }}
         onScrollBeginDrag={() => { Keyboard.dismiss(); }}
       >
         {/* Mode selector buttons */}
@@ -231,7 +295,9 @@ export default function SolverScreen() {
             <TouchableOpacity
               key={m.key}
               style={[s.modeBtn, mode === m.key && s.modeBtnActive]}
-              onPress={() => { setMode(m.key); setResult(null); }}
+              // Reset result and restore isDefinite default when switching modes
+              // so stale integrate results don't show under derivative, etc.
+              onPress={() => { setMode(m.key); setResult(null); if (m.key !== 'integrate') setIsDefinite(true); }}
             >
               <Text style={[s.modeBtnText, mode === m.key && s.modeBtnTextActive]}>{m.label}</Text>
             </TouchableOpacity>
@@ -240,11 +306,6 @@ export default function SolverScreen() {
 
         {/* Expression input — shown in ALL modes */}
         <Text style={s.label}>Expression:</Text>
-        {expression.length > 0 && (
-          <View style={s.previewBox}>
-            <MathDisplay latex={exprToLatex(expression)} style={{ height: 44 }} />
-          </View>
-        )}
         <TouchableOpacity
           style={s.inputBtn}
           onPress={() => { setActiveField('expr'); setShowKeyboard(true); Keyboard.dismiss(); }}
@@ -254,46 +315,92 @@ export default function SolverScreen() {
           </Text>
         </TouchableOpacity>
 
-        {/* Variable + limit fields — shown in non-AI modes */}
-        {mode !== 'ai' && (
-          <View style={s.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={s.label}>Variable:</Text>
+        {/* Live KaTeX preview — only shown when there is something to render.
+            toLatex() attempts a parse; if the expression is mid-edit and invalid
+            it returns null, so we fall back to the simpler MathDisplay unicode view. */}
+        {expression.length > 0 && (() => {
+          const latex = toLatex(expression);
+          return (
+            <>
+              <Text style={s.label}>Preview:</Text>
+              <View style={s.previewBox}>
+                {latex
+                  // compact prop reduces padding/line-height so the preview
+                  // fits in a small box without wasted whitespace
+                  ? <MathRenderer content={`$${latex}$`} compact />
+                  : <MathDisplay latex={exprToLatex(expression)} style={{ height: 44 }} />
+                }
+              </View>
+            </>
+          );
+        })()}
+
+        {/* Variable + mode-specific extra fields */}
+        <View style={s.row}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.label}>Variable:</Text>
+            <TouchableOpacity
+              style={s.inputBtnSm}
+              onPress={() => { setActiveField('var'); setShowKeyboard(true); }}
+            >
+              <Text style={s.inputText}>{variable || 'x'}</Text>
+            </TouchableOpacity>
+          </View>
+          {mode === 'limit' && (
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={s.label}>Approaches:</Text>
               <TouchableOpacity
                 style={s.inputBtnSm}
-                onPress={() => { setActiveField('var'); setShowKeyboard(true); }}
+                onPress={() => { setActiveField('limit'); setShowKeyboard(true); }}
               >
-                <Text style={s.inputText}>{variable || 'x'}</Text>
+                <Text style={s.inputText}>{limitValue || '0'}</Text>
               </TouchableOpacity>
             </View>
-            {mode === 'limit' && (
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={s.label}>Approaches:</Text>
-                <TouchableOpacity
-                  style={s.inputBtnSm}
-                  onPress={() => { setActiveField('limit'); setShowKeyboard(true); }}
-                >
-                  <Text style={s.inputText}>{limitValue || '0'}</Text>
-                </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Integrate-specific controls: definite/indefinite toggle + bound fields */}
+        {mode === 'integrate' && (
+          <>
+            {/* Toggle between definite (needs bounds, numerical) and
+                indefinite (symbolic antiderivative, no bounds) */}
+            <View style={s.toggleRow}>
+              <TouchableOpacity
+                style={[s.toggleBtn, isDefinite && s.toggleBtnActive]}
+                onPress={() => { setIsDefinite(true); setResult(null); }}
+              >
+                <Text style={[s.toggleBtnText, isDefinite && s.toggleBtnTextActive]}>Definite</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.toggleBtn, !isDefinite && s.toggleBtnActive]}
+                onPress={() => { setIsDefinite(false); setResult(null); }}
+              >
+                <Text style={[s.toggleBtnText, !isDefinite && s.toggleBtnTextActive]}>Indefinite</Text>
+              </TouchableOpacity>
+            </View>
+            {/* Bound inputs are hidden for indefinite integrals */}
+            {isDefinite && (
+              <View style={s.row}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.label}>Lower bound (a):</Text>
+                  <TouchableOpacity
+                    style={s.inputBtnSm}
+                    onPress={() => { setActiveField('lower'); setShowKeyboard(true); }}
+                  >
+                    <Text style={s.inputText}>{lowerBound}</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={s.label}>Upper bound (b):</Text>
+                  <TouchableOpacity
+                    style={s.inputBtnSm}
+                    onPress={() => { setActiveField('upper'); setShowKeyboard(true); }}
+                  >
+                    <Text style={s.inputText}>{upperBound}</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
-          </View>
-        )}
-
-        {/* AI instruction prompt — shown ONLY in AI mode */}
-        {mode === 'ai' && (
-          <>
-            <Text style={s.label}>What should the AI do?</Text>
-            <TextInput
-              style={s.aiPromptInput}
-              value={aiPrompt}
-              onChangeText={setAiPrompt}
-              placeholder="e.g. Integrate this, Find the limit as x→0, Solve step by step..."
-              placeholderTextColor="#555"
-              multiline
-              textAlignVertical="top"
-              onFocus={() => setShowKeyboard(false)}
-            />
           </>
         )}
 
@@ -301,53 +408,40 @@ export default function SolverScreen() {
           {loading ? <ActivityIndicator color="#fff" /> : <Text style={s.solveBtnText}>Solve</Text>}
         </TouchableOpacity>
 
-        {/* Quick example buttons with unicode labels */}
+        {/* Quick example buttons — per mode.
+            EXAMPLES[mode] is looked up so each mode shows only its own examples.
+            For integrate examples, lower/upper are also applied so the user can
+            tap and immediately hit Solve without typing anything. */}
         <Text style={s.exLabel}>Quick examples:</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-          {[
-            { raw: 'x^3 - 3*x + 2', label: 'x³−3x+2' },
-            { raw: 'sin(x) * cos(x)', label: 'sin·cos' },
-            { raw: 'x^4 - 8*x^2 + 3', label: 'x⁴−8x²+3' },
-            { raw: 'e^x * x^2', label: 'eˣ·x²' },
-            { raw: 'log(x) / x', label: 'ln(x)/x' },
-          ].map(ex => (
-            <TouchableOpacity key={ex.raw} style={s.exBtn} onPress={() => setExpression(ex.raw)}>
+          {(EXAMPLES[mode] || []).map(ex => (
+            <TouchableOpacity
+              key={ex.raw}
+              style={s.exBtn}
+              onPress={() => {
+                setExpression(ex.raw);
+                if (mode === 'limit' && ex.limitVal !== undefined) setLimitValue(ex.limitVal);
+                if (mode === 'integrate') {
+                  if (ex.lower !== undefined) setLowerBound(ex.lower);
+                  if (ex.upper !== undefined) setUpperBound(ex.upper);
+                }
+              }}
+            >
               <Text style={s.exBtnText}>{ex.label}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
 
-        {/* AI prompt quick suggestions — shown ONLY in AI mode */}
-        {mode === 'ai' && (
-          <>
-            <Text style={s.exLabel}>Common instructions:</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-              {[
-                { label: 'Integrate', text: 'Integrate this expression step by step' },
-                { label: 'Derivative', text: 'Find the derivative and simplify' },
-                { label: 'Limit →0', text: 'Find the limit as x approaches 0' },
-                { label: 'Limit →∞', text: 'Find the limit as x approaches infinity' },
-                { label: 'Optimize', text: 'Find all critical points, classify each as min/max, and find inflection points' },
-                { label: 'Taylor', text: 'Find the Taylor series expansion around x=0 up to the x^4 term' },
-                { label: 'Explain', text: 'Explain what this expression represents and its key properties' },
-              ].map(s_item => (
-                <TouchableOpacity key={s_item.label} style={s.aiSugBtn} onPress={() => setAiPrompt(s_item.text)}>
-                  <Text style={s.aiSugBtnText}>{s_item.label}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </>
-        )}
 
         {renderResult()}
       </ScrollView>
 
-      {/* Custom math keyboard overlay */}
+      {/* Custom math keyboard overlay — shown below the scroll area, not inside it */}
       {showKeyboard && (
         <View>
           <View style={s.kbHeader}>
             <Text style={s.kbFieldLabel}>
-              {activeField === 'expr' ? 'Expression' : activeField === 'var' ? 'Variable' : 'Limit value'}
+              {activeField === 'expr' ? 'Expression' : activeField === 'var' ? 'Variable' : activeField === 'limit' ? 'Limit value' : activeField === 'lower' ? 'Lower bound' : 'Upper bound'}
             </Text>
             <TouchableOpacity onPress={() => setShowKeyboard(false)}>
               <Text style={s.kbDone}>Done</Text>
@@ -357,6 +451,7 @@ export default function SolverScreen() {
             value={getActiveValue()}
             onChangeText={handleKeyboardInput}
             onHint={(msg) => Alert.alert('Tip', msg)}
+            layout={getKeyboardLayout()}
           />
         </View>
       )}
@@ -379,24 +474,6 @@ const s = StyleSheet.create({
   inputText: { color: '#fff', fontSize: 15 },
   row: { flexDirection: 'row', marginBottom: 10 },
 
-  // AI prompt text input — native TextInput so the system keyboard works for natural language
-  aiPromptInput: {
-    backgroundColor: '#16213e',
-    color: '#fff',
-    borderRadius: 10,
-    padding: 14,
-    fontSize: 14,
-    borderWidth: 1,
-    borderColor: '#0f3460',
-    marginBottom: 10,
-    minHeight: 70,
-    lineHeight: 20,
-  },
-
-  // AI prompt suggestion buttons
-  aiSugBtn: { backgroundColor: '#1a2a4e', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, marginRight: 8, borderWidth: 1, borderColor: '#0f3460' },
-  aiSugBtnText: { color: '#7aa2f7', fontSize: 12, fontWeight: '600' },
-
   solveBtn: { backgroundColor: '#e94560', borderRadius: 10, padding: 16, alignItems: 'center', marginBottom: 12 },
   solveBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
   exLabel: { color: '#555', fontSize: 11, marginBottom: 6 },
@@ -416,4 +493,11 @@ const s = StyleSheet.create({
   kbHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#0d1b2a', borderTopWidth: 1, borderTopColor: '#16213e' },
   kbFieldLabel: { color: '#888', fontSize: 13 },
   kbDone: { color: '#e94560', fontSize: 15, fontWeight: '700' },
+  toggleRow: { flexDirection: 'row', marginBottom: 10, gap: 8 },
+  toggleBtn: { flex: 1, paddingVertical: 8, borderRadius: 20, backgroundColor: '#16213e', borderWidth: 1, borderColor: '#0f3460', alignItems: 'center' },
+  toggleBtnActive: { backgroundColor: '#1a3a6e', borderColor: '#4a7aff' },
+  toggleBtnText: { color: '#888', fontSize: 13, fontWeight: '600' },
+  toggleBtnTextActive: { color: '#7aa2f7' },
+  integralExpr: { color: '#e0e0e0', fontSize: 16, fontStyle: 'italic', paddingVertical: 4 },
+  integralAnswer: { color: '#e94560', fontSize: 18, fontWeight: '700' },
 });

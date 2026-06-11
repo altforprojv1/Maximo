@@ -13,10 +13,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, Linking } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getConfig, saveConfig, PROVIDERS } from '../services/apiConfig';
 
 /** @returns {React.ReactElement} Settings screen with provider/key/model config. */
 export default function SettingsScreen() {
+  const insets = useSafeAreaInsets();
   const [provider, setProvider] = useState('claude');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
@@ -27,7 +29,7 @@ export default function SettingsScreen() {
   const handleProviderChange = (p) => { setProvider(p); setModel(PROVIDERS[p].defaultModel); };
   const info = PROVIDERS[provider];
   return (
-    <ScrollView style={s.container} contentContainerStyle={{ paddingBottom: 100 }}>
+    <ScrollView style={s.container} contentContainerStyle={{ paddingBottom: 100 + insets.bottom }}>
       <Text style={s.title}>⚙️ AI Settings</Text>
       <Text style={s.subtitle}>Configure your AI provider for the Scanner and AI Solver features.</Text>
       <Text style={s.label}>AI Provider</Text>
